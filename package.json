@@ -1,0 +1,16 @@
+{
+  "name": "research-outreach-agent",
+  "version": "1.0.0",
+  "description": "OpenClaw agent: research → summarise → outreach generation for financial institutions",
+  "type": "module",
+  "scripts": {
+    "install-agent": "node scripts/install-research-outreach.mjs",
+    "uninstall-agent": "node scripts/uninstall-research-outreach.mjs"
+  },
+  "dependencies": {
+    "json5": "^2.2.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

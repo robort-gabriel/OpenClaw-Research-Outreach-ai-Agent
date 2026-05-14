@@ -1,0 +1,6 @@
+node_modules/
+workspace-research-outreach/memory/logs/
+workspace-research-outreach/memory/drafts/pending.json
+workspace-research-outreach/config/settings.json
+workspace-research-outreach/memory/learning/
+*.bak.*

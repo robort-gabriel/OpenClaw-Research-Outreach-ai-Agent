@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "list": [
+      {
+        "id": "research-outreach",
+        "name": "Aria — Research & Outreach",
+        "workspace": "~/.openclaw/workspace-research-outreach",
+        "model": "openai/gpt-4.1",
+        "tools": {
+          "allow": ["group:fs", "group:web", "message", "lobster", "llm-task"],
+          "exec": {
+            "host": "gateway",
+            "security": "allowlist",
+            "ask": "off"
+          }
+        }
+      }
+    ]
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "accounts": {
+        "research-outreach": {
+          "enabled": true,
+          "dmPolicy": "pairing",
+          "botToken": "${TELEGRAM_BOT_TOKEN_RESEARCH_OUTREACH}",
+          "groupPolicy": "disabled"
+        }
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "research-outreach",
+      "match": {
+        "channel": "telegram",
+        "accountId": "research-outreach",
+        "peer": {
+          "kind": "user",
+          // Replace with your Telegram user ID (get it from @userinfobot)
+          "id": "${TELEGRAM_USER_ID}"
+        }
+      }
+    }
+  ],
+  "plugins": {
+    "entries": {
+      "lobster": { "enabled": true },
+      "llm-task": { "enabled": true }
+    }
+  }
+}
