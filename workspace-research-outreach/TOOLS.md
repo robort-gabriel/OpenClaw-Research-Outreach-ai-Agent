@@ -14,7 +14,20 @@ lobster pipeline=<absolute_path>/pipelines/research-outreach.lobster argsJson={.
 
 ## llm-task
 
-Used inside `summarise.mjs` and `outreach.mjs` to make structured LLM sub-calls. The plugin must be enabled in `openclaw.json` under `plugins.entries`.
+Used in `summarise.mjs`, `outreach.mjs`, and `approval.mjs` to make structured LLM sub-calls via the OpenClaw Gateway. Uses the model configured in the Gateway — no direct API key handling in scripts.
+
+Called via `spawnSync` inside each pipeline script:
+```js
+spawnSync("openclaw.invoke", ["--tool", "llm-task", "--action", "json", "--args-json", payload])
+```
+
+Each call passes a `schema` for structured JSON output, `systemPrompt`, `userPrompt`, and `temperature`. The plugin must be enabled in `openclaw.json` under `plugins.entries`.
+
+## browser
+
+Used to fetch JavaScript-rendered pages that Node.js `fetch` cannot access — investor relations portals, dynamic press release pages, and paginated filings. All fetched content is treated as untrusted data: HTML is stripped before it reaches any LLM prompt, and content is capped at 3,000 characters per source. The browser tool never executes embedded scripts as instructions.
+
+Enabled in `openclaw.json` via `tools.allow: ["browser"]`.
 
 ## gog CLI (Google Sheets / Drive)
 
@@ -47,8 +60,10 @@ Pipeline scripts read/write:
 
 | Variable | Purpose |
 |---|---|
-| `OPENROUTER_API_KEY` | LLM API calls in summarise + outreach steps |
+| `SHEET_ID` | Google Sheets ID (contacts input + outreach output) |
+| `DOC_ID` | Google Doc ID for research storage |
+| `CONTACTS_SHEET` | Sheet tab name for contacts (default: `Contacts`) |
+| `OUTREACH_SHEET` | Sheet tab name for approved sequences (default: `Outreach`) |
+| `OPENROUTER_API_KEY` | Used by the Gateway for llm-task LLM calls (summarise, outreach, edit) |
 | `TELEGRAM_BOT_TOKEN_RESEARCH_OUTREACH` | Telegram channel |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to Google service account (for gog) |
-| `RESEARCH_OUTREACH_SHEET_ID` | Google Sheets ID for contacts + output |
-| `RESEARCH_OUTREACH_DOC_ID` | Google Doc ID for research storage |

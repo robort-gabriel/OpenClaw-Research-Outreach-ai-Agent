@@ -6,6 +6,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { readStdinJson } from "./lib/stdin.mjs";
 import { logStep, redact } from "./lib/log_step.mjs";
 
@@ -19,41 +20,35 @@ function loadPrompt(workspaceRoot) {
   return readFileSync(path, "utf8");
 }
 
-async function callLlm(apiKey, model, systemPrompt, userContent) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "research-outreach-agent",
-    },
-    body: JSON.stringify({
-      model: model.replace(/^openrouter\//, ""),
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.3,
-      max_tokens: 2000,
-    }),
+const SUMMARISE_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    insights: { type: "array", items: { type: "string" } },
+    key_facts: { type: "array", items: { type: "string" } },
+    gaps: { type: "array", items: { type: "string" } },
+  },
+  required: ["summary", "insights", "key_facts", "gaps"],
+  additionalProperties: false,
+};
+
+function callLlmTask(systemPrompt, userPrompt) {
+  const payload = JSON.stringify({
+    systemPrompt,
+    userPrompt,
+    temperature: 0.3,
+    schema: SUMMARISE_SCHEMA,
   });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`OpenRouter API error ${res.status}: ${redact(errText)}`);
+  const result = spawnSync(
+    "openclaw.invoke",
+    ["--tool", "llm-task", "--action", "json", "--args-json", payload],
+    { encoding: "utf8", timeout: 120000, env: { ...process.env } }
+  );
+  if (result.status !== 0) {
+    throw new Error(`llm-task failed: ${redact((result.stderr || "").slice(0, 500))}`);
   }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM returned empty content");
-  return content;
-}
-
-function parseLlmJson(text) {
-  // Strip markdown code fences if present
-  const cleaned = text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
-  return JSON.parse(cleaned);
+  const data = JSON.parse(result.stdout);
+  return data.result ?? data;
 }
 
 function buildFallbackSummary(target, contact, role, region) {
@@ -84,9 +79,7 @@ async function main() {
   }
 
   const { workspace_root, target, contact, role, region, research_raw, fallback, from_cache, cached_research } = input;
-  const model = "openrouter/openai/gpt-4.1";
   const maxResearchChars = 12000;
-  const apiKey = process.env.OPENROUTER_API_KEY;
 
   // Cache hit — use cached research as the summary directly
   if (from_cache && cached_research) {
@@ -109,19 +102,11 @@ async function main() {
     return;
   }
 
-  if (!apiKey) {
-    logStep(workspace_root, { step: "summarise", status: "error", reason: "OPENROUTER_API_KEY not set" });
-    const fb = buildFallbackSummary(target, contact, role, region);
-    out({ ...input, ...fb, fallback: true });
-    return;
-  }
-
   logStep(workspace_root, { step: "summarise", status: "start", bank: target });
 
   try {
     const systemPrompt = loadPrompt(workspace_root);
 
-    // Build user content from raw research
     const researchText = (research_raw || [])
       .map((s, i) => `--- Source ${i + 1}: ${s.title} (${s.date})\nURL: ${s.url}\n${s.content}`)
       .join("\n\n")
@@ -136,8 +121,7 @@ ${researchText}
 
 Summarise this research and extract the top insights for outreach. Return valid JSON only.`;
 
-    const raw = await callLlm(apiKey, model, systemPrompt, userContent);
-    const parsed = parseLlmJson(raw);
+    const parsed = callLlmTask(systemPrompt, userContent);
 
     logStep(workspace_root, {
       step: "summarise",

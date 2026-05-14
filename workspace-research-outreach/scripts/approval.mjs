@@ -62,7 +62,29 @@ function updateContactStatus(sheetId, contactsSheet, rowIndex, status) {
   return result.status === 0;
 }
 
-async function callLlmForEdit(apiKey, model, draft, editInstructions) {
+const SEQUENCE_SCHEMA = {
+  type: "object",
+  properties: {
+    sequence: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          step: { type: "number" },
+          channel: { type: "string" },
+          subject: { type: ["string", "null"] },
+          message: { type: "string" },
+        },
+        required: ["step", "channel", "message"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["sequence"],
+  additionalProperties: false,
+};
+
+function callLlmTaskForEdit(draft, editInstructions) {
   const sequence = draft.sequence || [];
   const seqText = sequence
     .map((s) => `Step ${s.step} (${s.channel}): ${s.message}`)
@@ -76,7 +98,7 @@ async function callLlmForEdit(apiKey, model, draft, editInstructions) {
     ? readFileSync(join(workspaceRoot, "config", "business-context.md"), "utf8").slice(0, 1500)
     : "";
 
-  const userContent = `You previously generated this outreach sequence:
+  const userPrompt = `You previously generated this outreach sequence:
 
 ${seqText}
 
@@ -88,36 +110,22 @@ ${businessContext ? `\nBusiness context:\n${businessContext}` : ""}
 
 Regenerate the full sequence incorporating the requested changes. Return ONLY valid JSON with the sequence array.`;
 
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "research-outreach-agent",
-    },
-    body: JSON.stringify({
-      model: model.replace(/^openrouter\//, ""),
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.5,
-      max_tokens: 3000,
-    }),
+  const payload = JSON.stringify({
+    systemPrompt,
+    userPrompt,
+    temperature: 0.5,
+    schema: SEQUENCE_SCHEMA,
   });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`LLM API error ${res.status}: ${redact(errText)}`);
+  const result = spawnSync(
+    "openclaw.invoke",
+    ["--tool", "llm-task", "--action", "json", "--args-json", payload],
+    { encoding: "utf8", timeout: 120000, env: { ...process.env } }
+  );
+  if (result.status !== 0) {
+    throw new Error(`llm-task failed: ${redact((result.stderr || "").slice(0, 500))}`);
   }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM returned empty content for edit");
-
-  const cleaned = content.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
-  const parsed = JSON.parse(cleaned);
+  const data = JSON.parse(result.stdout);
+  const parsed = data.result ?? data;
   return parsed.sequence || sequence;
 }
 
@@ -216,16 +224,6 @@ async function main() {
   }
 
   if (action === "edit") {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      out({
-        skipped: false,
-        requestAgentSend: true,
-        agentMessage: `Cannot regenerate — OPENROUTER_API_KEY not set in .env.\n\nSet it and retry.`,
-      });
-      return;
-    }
-
     if (!changes) {
       out({
         skipped: false,
@@ -236,7 +234,7 @@ async function main() {
     }
 
     try {
-      const newSequence = await callLlmForEdit(apiKey, model, draft, changes);
+      const newSequence = callLlmTaskForEdit(draft, changes);
       draft.sequence = newSequence;
       pending[draftId] = draft;
       savePending(workspaceRoot, pending);

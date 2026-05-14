@@ -6,6 +6,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { readStdinJson } from "./lib/stdin.mjs";
 import { logStep, redact } from "./lib/log_step.mjs";
 
@@ -18,40 +19,45 @@ function loadFile(path, label) {
   return readFileSync(path, "utf8");
 }
 
-async function callLlm(apiKey, model, systemPrompt, userContent) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "research-outreach-agent",
+const SEQUENCE_SCHEMA = {
+  type: "object",
+  properties: {
+    sequence: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          step: { type: "number" },
+          channel: { type: "string" },
+          subject: { type: ["string", "null"] },
+          message: { type: "string" },
+        },
+        required: ["step", "channel", "message"],
+        additionalProperties: false,
+      },
     },
-    body: JSON.stringify({
-      model: model.replace(/^openrouter\//, ""),
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.5,
-      max_tokens: 3000,
-    }),
+  },
+  required: ["sequence"],
+  additionalProperties: false,
+};
+
+function callLlmTask(systemPrompt, userPrompt) {
+  const payload = JSON.stringify({
+    systemPrompt,
+    userPrompt,
+    temperature: 0.5,
+    schema: SEQUENCE_SCHEMA,
   });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`OpenRouter API error ${res.status}: ${redact(errText)}`);
+  const result = spawnSync(
+    "openclaw.invoke",
+    ["--tool", "llm-task", "--action", "json", "--args-json", payload],
+    { encoding: "utf8", timeout: 120000, env: { ...process.env } }
+  );
+  if (result.status !== 0) {
+    throw new Error(`llm-task failed: ${redact((result.stderr || "").slice(0, 500))}`);
   }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM returned empty content");
-  return content;
-}
-
-function parseLlmJson(text) {
-  const cleaned = text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
-  return JSON.parse(cleaned);
+  const data = JSON.parse(result.stdout);
+  return data.result ?? data;
 }
 
 function extractFallbackTemplate(examplesContent) {
@@ -102,12 +108,10 @@ async function main() {
     summary, insights, key_facts, fallback,
   } = input;
 
-  const model = "openrouter/openai/gpt-4.1";
-  const apiKey = process.env.OPENROUTER_API_KEY;
   const draft_id = String(Date.now());
 
   // Fallback sequence — no LLM needed
-  if (fallback || !apiKey) {
+  if (fallback) {
     logStep(workspace_root, { step: "outreach", status: "fallback", bank: target });
     const sequence = buildFallbackSequence(target, contact, role, region);
     out({ ...input, sequence, draft_id, fallback: true });
@@ -159,8 +163,7 @@ ${toneOfVoice.slice(0, 1500)}
 
 Return ONLY valid JSON with the sequence array. No markdown.`;
 
-    const raw = await callLlm(apiKey, model, systemPrompt, userContent);
-    const parsed = parseLlmJson(raw);
+    const parsed = callLlmTask(systemPrompt, userContent);
     const sequence = parsed.sequence || buildFallbackSequence(target, contact, role, region);
 
     logStep(workspace_root, {

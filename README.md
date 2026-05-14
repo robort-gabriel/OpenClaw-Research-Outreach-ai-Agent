@@ -39,7 +39,7 @@ An `openclaw` + `ai agent` setup for researching target banks and contacts, gene
 - [How to Re-run Research](#how-to-re-run-research)
 - [How to Swap LLM Models](#how-to-swap-llm-models)
 - [Fallback Mode](#fallback-mode)
-- [Security Measures](#security-measures)
+- [Security & Privacy](#security--privacy)
 - [Uninstall](#uninstall)
 
 ## What This Project Does
@@ -252,11 +252,11 @@ Aria:  Draft #1735123456 approved. Outreach sequence saved to Google Sheets.
 | Script | Role |
 |--------|------|
 | `pre.mjs` | Reads target row from Google Sheets, checks the 7-day research cache |
-| `research.mjs` | Fetches Google News RSS, bank homepage, investor relations page |
-| `summarise.mjs` | LLM call: cleans raw content, extracts 5–7 insights and key facts |
-| `outreach.mjs` | LLM call: generates personalised 3–5 step sequence using insights + business context |
+| `research.mjs` | Fetches Google News RSS, bank homepage, investor relations page via browser tool |
+| `summarise.mjs` | `llm-task`: cleans raw content, extracts 5–7 insights and key facts |
+| `outreach.mjs` | `llm-task`: generates personalised 3–5 step sequence using insights + business context |
 | `post.mjs` | Saves pending draft, appends findings log, sends Telegram preview |
-| `approval.mjs` | Handles approve / reject / edit — writes to Sheets on approval |
+| `approval.mjs` | Handles approve / reject / `llm-task` edit — writes to Sheets on approval |
 
 All scripts follow the same contract:
 
@@ -264,6 +264,7 @@ All scripts follow the same contract:
 - Write only JSON to stdout — no `console.log`
 - Propagate `skipped: true` immediately if an upstream step failed
 - Log every step to `memory/logs/runs.jsonl`, never secrets
+- LLM calls go through `llm-task` via the Gateway — no direct API calls in scripts
 
 ## How to Update Prompts
 
@@ -287,7 +288,7 @@ Send `/rerun <bank name>` in Telegram. This bypasses the 7-day cache in `finding
 
 ## How to Swap LLM Models
 
-The model is set to `openrouter/openai/gpt-4.1` by default in the pipeline scripts. To change it, edit the `model` constant in `summarise.mjs`, `outreach.mjs`, and `approval.mjs` in the installed workspace scripts. Any [OpenRouter model](https://openrouter.ai/models) works with the `openrouter/` prefix.
+LLM calls go through the `llm-task` Gateway plugin — the model is controlled by your Gateway config, not hardcoded in scripts. To change it, update the model in `~/.openclaw/openclaw.json` under the `llm-task` provider settings. Any [OpenRouter model](https://openrouter.ai/models) works. No script edits or gateway restart required — takes effect on the next run.
 
 ## Fallback Mode
 
@@ -298,25 +299,42 @@ If fewer than 2 usable research sources are found, the agent enters fallback mod
 - Marks the Telegram preview with `[FALLBACK MODE]` so you know
 - You can still approve, reject, or use `/rerun` to try again
 
-## Security Measures
+## Security & Privacy
 
-This agent is designed with safety-first defaults for production use.
+This agent is built privacy-first and security-first by default. No data leaves your infrastructure without explicit approval, and no web content is ever trusted as instructions.
+
+### Privacy guarantees
+
+- **Your contacts stay yours** — the Contacts sheet is read-only input. Nothing is written back until you explicitly type `approve N`.
+- **No data sent to third parties beyond what you configure** — LLM calls go through the Gateway's `llm-task` plugin using your own OpenRouter API key. Google Sheets/Doc access uses your own service account. No telemetry.
+- **Personal contact data is never logged** — `memory/logs/runs.jsonl` records step status and timing only. Names, roles, and outreach content stay in `memory/drafts/pending.json`, which is gitignored.
+- **Single-user binding** — the Telegram channel is locked to your user ID via `peer.id` in `openclaw.json`. No group access. No open DMs.
+
+### Web content sandboxing
+
+The agent fetches public pages and RSS feeds to research target institutions. All fetched content is treated as untrusted data:
+
+- HTML is fully stripped (scripts, styles, tags) before any content reaches an LLM prompt
+- Content is hard-capped at 3,000 characters per source and 12,000 characters total
+- Fetched content is passed as labelled data context — never as instructions
+- The browser tool is read-only: no form submissions, no link-following, no actions on fetched pages
+- If embedded prompt injection appears in a fetched page, the pipeline ignores it — the LLM is instructed to summarise only
 
 ### Built-in security controls
 
 - **Human-in-the-loop saving:** no sequence is written to Google Sheets without explicit `approve N`
 - **No auto-send:** outreach is never dispatched automatically to any channel
-- **Least-privilege tooling:** `tools.allow` is scoped to only what the agent needs
-- **Secrets in `.env` only:** tokens and API keys are never committed or logged
-- **External content treated as untrusted:** page content and RSS feeds are summarised, never executed as instructions
-- **Deterministic pipeline flow:** Lobster reduces ad-hoc LLM command risk during research and approval paths
+- **Deterministic pipeline flow:** Lobster runs fixed steps in fixed order — no ad-hoc LLM command chaining
+- **Least-privilege tooling:** `tools.allow` is scoped to fs, web, browser, message, and lobster only
+- **Unused plugins disabled:** `llm-task` is disabled since all LLM calls go direct — no unnecessary plugin surface
+- **Secrets in `.env` only:** tokens and API keys are never committed, never logged, never passed through the pipeline
 
 ### Operator hardening checklist
 
-- Fill in `config/business-context.md` and `config/tone-of-voice.md` before running — empty context produces poor output
-- Keep `OPENROUTER_API_KEY` rotated and restricted; revoke immediately if exposed
-- Bind the agent to a specific Telegram user ID in `openclaw.json` — do not use `groupPolicy: open`
-- Keep approval flow enabled and do not modify `approval.mjs` to bypass the pending-draft check
+- Fill in `config/business-context.md` and `config/tone-of-voice.md` before running — empty context produces weak output
+- Keep `OPENROUTER_API_KEY` rotated; revoke immediately if exposed
+- Bind the agent to a specific Telegram user ID — do not change `groupPolicy` to `open`
+- Do not modify `approval.mjs` to bypass the pending-draft check
 - Review `memory/logs/runs.jsonl` periodically to confirm no unexpected API calls
 
 ## Uninstall

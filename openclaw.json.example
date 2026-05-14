@@ -7,7 +7,7 @@
         "workspace": "~/.openclaw/workspace-research-outreach",
         "model": "openai/gpt-4.1",
         "tools": {
-          "allow": ["group:fs", "group:web", "message", "lobster", "llm-task"],
+          "allow": ["group:fs", "group:web", "browser", "message", "lobster"],
           "exec": {
             "host": "gateway",
             "security": "allowlist",
